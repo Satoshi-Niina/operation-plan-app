@@ -15,6 +15,37 @@ export type OperationPlan = {
   note: string;
 };
 
+export type VehicleCategory = "軌道モーターカー" | "鉄製トロ";
+
+export type VehicleMaster = {
+  machineNumber: string;
+  model: string;
+  office: string;
+  homeBase: string;
+};
+
+export type VehicleInspectionMaster = {
+  machineNumber: string;
+  model: string;
+  category: VehicleCategory;
+  inspectionBase: string;
+};
+
+export type InspectionRule = {
+  category: VehicleCategory;
+  inspectionType: string;
+  phaseMonths: number;
+  intervalMonths: number;
+  inspectionDays: number;
+};
+
+export type InspectionActual = {
+  id: string;
+  machineNumber: string;
+  completedDate: string;
+  phaseMonths: number;
+};
+
 export type OperationActual = {
   id: string;
   date: string;

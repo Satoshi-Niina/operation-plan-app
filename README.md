@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Data storage
+# 運用管理アプリ
 
-## Getting Started
+保守用車の運用計画、留置実績、検修予定をテナント単位で管理する Next.js アプリケーションです。ダッシュボードアプリケーションがログインとマスタ保守を担い、本アプリは受け取ったテナントをもとに運用データを表示・更新する構成です。
 
-First, run the development server:
+## 主な機能
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+### 運用計画管理
+
+- 保線作業所、保守用車、保守基地で計画を絞り込み
+- 日付を縦、保守基地を横に表示する月間運用表
+- セルのダブルクリックによる車両、出発・到着基地、時間帯の登録
+- 昼間、昼夜、夜間の時間帯に対応。夜間は翌日の留置・帰着を表示
+- 同一基地・同日に複数の車両計画を表示
+- 計画カードのクリックによる編集・削除、カードのセル間ドラッグ＆ドロップによる日付・出発基地の変更
+- 基地列の並び替え、列幅のドラッグ調整。計画表の列幅は $60px$ から $500px$ の範囲
+- 検修周期と検修実績をもとに、検修予定を月間表へ表示。検修予定は開始日・終了日・検修基地を編集可能
+- 表示年月の切り替え、最終更新日時の表示、A3横向きのプレビュー・印刷
+
+### 運用実績管理
+
+- 運用計画に含まれる車両を読み込み、日別・基地別の留置場所を表示
+- 計画由来の留置は水色、実績として変更した留置は青色、検修は赤系で表示
+- 車両カードのクリック、または移動先セルへのドラッグ＆ドロップによる留置日・留置基地の変更
+- 留置場所の変更後は、次の変更まで同じ基地に留置されているものとして表示
+- 検修中の車両は通常の留置表示より検修表示を優先
+- 基地列の並び替え・幅調整、A3横向きのプレビュー・印刷
+
+## データ構成
+
+`src/lib/data/operations.ts` がデータ取得・保存の窓口です。画面はこのリポジトリを通して、以下のテナント別データを扱います。
+
+- 保線作業所マスタ
+- 保守基地マスタ
+- 保守用車マスタ
+- 検修車両マスタ、検査ルール、検修実績
+- 運用計画
+
+`DATABASE_URL` が未設定の場合は `src/lib/mock/operations.ts` のモックデータを使用します。ローカルでUIを確認しながら、Cloud SQL接続の準備を進められます。
+
+`DATABASE_URL` を設定した場合は、Google Cloud SQL for PostgreSQLへ `pg` ドライバで接続します。運用計画の登録・更新・削除は `/api/tenants/[tenant]/plans` を通じて保存され、実績画面は同じリポジトリから計画データを取得します。
+
+## Cloud SQL の準備
+
+1. Google Cloud SQL に PostgreSQL インスタンスとアプリケーション用ユーザーを作成します。
+2. [db/schema.sql](db/schema.sql) を対象データベースへ適用します。
+3. `.env.example` を参考に `.env.local` へ `DATABASE_URL` を設定します。
+4. Cloud RunではCloud SQLコネクタ、またはCloud SQL Auth Proxy経由の接続を利用します。
+
+```env
+DATABASE_URL=postgresql://APP_USER:APP_PASSWORD@HOST:5432/operation_management
+DATABASE_SSL=false
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+DB接続後は、ダッシュボードアプリ側でマスタデータを管理し、本アプリではテナントに紐づくデータを参照する運用を想定しています。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 開発
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+必要環境は Node.js 20 以降です。
 
-## Learn More
+```bash
+npm install
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+ブラウザーで `http://localhost:3000` を開きます。初期画面は `/daitetsu` です。
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+品質確認コマンド:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npm run build
+```

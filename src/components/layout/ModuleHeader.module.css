@@ -1,0 +1,7 @@
+.header { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding-bottom: 25px; border-bottom: 1px solid var(--line); }
+.eyebrow { margin-bottom: 10px; color: var(--teal); font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+.header h1 { color: var(--ink); font-size: clamp(26px, 3vw, 38px); letter-spacing: .03em; }
+.description { margin-top: 10px; color: var(--muted); font-size: 14px; }
+.back { min-height: 44px; display: inline-flex; align-items: center; padding: 10px 16px; color: white; background: #2864dc; border: 1px solid #1f56c9; border-radius: 4px; font-size: 15px; font-weight: 800; white-space: nowrap; }
+.back::before { content: "←"; margin-right: 8px; font-size: 18px; }
+@media (max-width: 650px) { .header { align-items: flex-start; flex-direction: column; }.back { padding-top: 0; } }
