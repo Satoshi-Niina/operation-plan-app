@@ -33,11 +33,16 @@ yarn-error.log*
 # env files
 .env
 .env.*
-.env*.local
 !.env.example
+!.env.production.example
+.env*.local
 !.env.*.example
 
 # Secrets & Credentials
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
 *.pem
 *.key
 *.p12
