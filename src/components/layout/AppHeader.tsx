@@ -11,9 +11,8 @@ export async function AppHeader({ tenant }: AppHeaderProps) {
   const session = await getAppSession();
   const userName = session?.displayName || session?.username || "未認証";
   const isSuperAdmin = Boolean(
-    session?.isSuperAdmin ||
-    session?.role === "system_admin" ||
-    String(session?.username || "").toLowerCase() === "niina"
+    session?.isSuperAdmin === true ||
+    session?.role === "system_admin"
   );
 
   const isDbConfigured = Boolean(process.env.DATABASE_URL || process.env.DB_CONNECTION_URL || process.env[`TENANT_DB_${tenant.toUpperCase()}_URL`]);

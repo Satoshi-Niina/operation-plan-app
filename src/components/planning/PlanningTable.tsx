@@ -138,7 +138,7 @@ export function PlanningTable({ tenant, rows, offices, bases, officeBases, vehic
   function deleteSelectedPlan() {
     if (!selectedPlanId) return;
     setSaveStatus("saving");
-    void fetch(`/api/tenants/${encodeURIComponent(tenant)}/plans?id=${encodeURIComponent(selectedPlanId)}`, { method: "DELETE" }).then((response) => { setSaveStatus(response.ok ? "saved" : "unsaved"); window.dispatchEvent(new CustomEvent("operation-dirty-change", { detail: !response.ok })); }).catch(() => setSaveStatus("unsaved"));
+    void fetch(`/planning/api/tenants/${encodeURIComponent(tenant)}/plans?id=${encodeURIComponent(selectedPlanId)}`, { method: "DELETE" }).then((response) => { setSaveStatus(response.ok ? "saved" : "unsaved"); window.dispatchEvent(new CustomEvent("operation-dirty-change", { detail: !response.ok })); }).catch(() => setSaveStatus("unsaved"));
     setPlans((current) => current.filter((plan) => plan.id !== selectedPlanId));
     setSelectedPlanId(null);
     setUpdatedAt(new Date());
@@ -170,7 +170,7 @@ export function PlanningTable({ tenant, rows, offices, bases, officeBases, vehic
     if (!plan) return;
     const movedPlan = { ...plan, date, departureBase };
       setSaveStatus("saving");
-      void fetch(`/api/tenants/${encodeURIComponent(tenant)}/plans`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(movedPlan) }).then((response) => { setSaveStatus(response.ok ? "saved" : "unsaved"); window.dispatchEvent(new CustomEvent("operation-dirty-change", { detail: !response.ok })); }).catch(() => setSaveStatus("unsaved"));
+      void fetch(`/planning/api/tenants/${encodeURIComponent(tenant)}/plans`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(movedPlan) }).then((response) => { setSaveStatus(response.ok ? "saved" : "unsaved"); window.dispatchEvent(new CustomEvent("operation-dirty-change", { detail: !response.ok })); }).catch(() => setSaveStatus("unsaved"));
     setPlans((current) => current.map((item) => item.id === planId ? movedPlan : item));
     setSelectedPlanId(planId);
     setUpdatedAt(new Date());
@@ -224,7 +224,7 @@ export function PlanningTable({ tenant, rows, offices, bases, officeBases, vehic
       timeBand: form.timeBand,
     };
       setSaveStatus("saving");
-      void fetch(`/api/tenants/${encodeURIComponent(tenant)}/plans`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).then((response) => { setSaveStatus(response.ok ? "saved" : "unsaved"); window.dispatchEvent(new CustomEvent("operation-dirty-change", { detail: !response.ok })); }).catch(() => setSaveStatus("unsaved"));
+      void fetch(`/planning/api/tenants/${encodeURIComponent(tenant)}/plans`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).then((response) => { setSaveStatus(response.ok ? "saved" : "unsaved"); window.dispatchEvent(new CustomEvent("operation-dirty-change", { detail: !response.ok })); }).catch(() => setSaveStatus("unsaved"));
     setPlans((current) => [...current.filter((plan) => plan.id !== editingCell.planId && !(plan.date === entry.date && plan.machineNumber === entry.machineNumber)), entry]);
     setSelectedPlanId(entry.id);
     setUpdatedAt(new Date());

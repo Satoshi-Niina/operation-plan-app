@@ -11,6 +11,23 @@ export const TENANT_DB_MAP: Record<string, string> = {
 
 export const ALLOWED_TENANT_KEYS = Object.keys(TENANT_DB_MAP);
 
+export class TenantDatabaseUnavailableError extends Error {
+  status: number;
+  code: string;
+  constructor(message: string, code = "TENANT_DATABASE_UNAVAILABLE") {
+    super(message);
+    this.status = 503;
+    this.code = code;
+  }
+}
+
+/**
+ * DB接続URL内のパスワードをマスクして安全にログ出力する。
+ */
+export function maskDatabaseUrl(url: string): string {
+  return String(url || "").replace(/:[^:@]+@/u, ":***@");
+}
+
 export function isAllowedTenant(tenantKey: string): boolean {
   const norm = String(tenantKey || "").trim().toLowerCase();
   return Boolean(norm && TENANT_DB_MAP[norm]);
@@ -51,8 +68,8 @@ export function buildDatabaseUrlForDatabase(baseDatabaseUrl: string, targetDbNam
 
 /**
  * 指定テナント用のDB接続URLを決定する。
- * 1. TENANT_DB_<TENANT>_URL 環境変数（完全URL指定）
- * 2. DATABASE_URL または DB_CONNECTION_URL のDB名を置換
+ * 1. TENANT_DB_<TENANT>_URL 環境変数（本番明示指定・推奨）
+ * 2. DATABASE_URL または DB_CONNECTION_URL のDB名を置換（フォールバック）
  */
 export function getTenantDatabaseUrl(tenantKey: string): string | null {
   const dbName = resolveTenantDatabaseName(tenantKey);
@@ -76,8 +93,10 @@ export function getTenantDatabaseUrl(tenantKey: string): string | null {
  * 指定テナントに対応するPostgreSQL接続プールを取得する。
  * - ユーザーによる任意DB指定を遮断（ホワイトリスト検証）
  * - テナントごとに接続プールを分離・キャッシュ
- * - 接続失敗時は他テナントへ絶対にフォールバックせずエラーとして監査ログを出力
- * - DB未設定時は null（モックデータフォールバック）を返す
+ * - 本番・統合環境でのモックフォールバックを禁止（ALLOW_MOCK_DATA === 'true' かつ NODE_ENV !== 'production' のみ許可）
+ * - DB未設定または接続失敗時は 503 エラーを返す
+ * - 接続失敗時に他テナントDBへのフォールバックは絶対に行わない
+ * - ログ出力時はDB認証情報を必ずマスクする
  */
 export async function getTenantPool(tenantKey: string): Promise<Pool | null> {
   const normKey = String(tenantKey || "").trim().toLowerCase();
@@ -89,9 +108,23 @@ export async function getTenantPool(tenantKey: string): Promise<Pool | null> {
 
   // 2. 接続URLの解決
   const connectionString = getTenantDatabaseUrl(normKey);
+  const isMockAllowed = process.env.NODE_ENV !== "production" && process.env.ALLOW_MOCK_DATA === "true";
+
   if (!connectionString) {
-    // DB接続設定がない場合はモックモードとして安全に null を返す
-    return null;
+    if (isMockAllowed) {
+      console.warn(`[tenantPool] DB接続情報が未設定のため、ローカル開発用モックデータを使用します (tenant=${normKey})`);
+      return null;
+    }
+    const err = new TenantDatabaseUnavailableError(
+      `テナントデータベース "${resolveTenantDatabaseName(normKey)}" の接続情報が設定されていません。`,
+      "TENANT_DATABASE_NOT_CONFIGURED"
+    );
+    logSystemError(null, err, {
+      errorCode: "TENANT_DATABASE_NOT_CONFIGURED",
+      tenant: normKey,
+      targetDb: resolveTenantDatabaseName(normKey),
+    });
+    throw err;
   }
 
   // 3. キャッシュ確認
@@ -121,13 +154,34 @@ export async function getTenantPool(tenantKey: string): Promise<Pool | null> {
   });
 
   pool.on("error", (err) => {
-    console.error(`[tenantPool] 接続プールエラー (${normKey}):`, err);
+    console.error(`[tenantPool] 接続プール非同期エラー (${normKey}):`, err);
     logSystemError(null, err, {
       errorCode: "TENANT_DB_POOL_ERROR",
       tenant: normKey,
       targetDb: resolveTenantDatabaseName(normKey),
+      maskedUrl: maskDatabaseUrl(connectionString),
     });
   });
+
+  // 5. 接続テスト（ヘルスチェック）の実施
+  try {
+    const client = await pool.connect();
+    client.release();
+  } catch (connectErr) {
+    console.error(`[tenantPool] データベース接続失敗 (tenant=${normKey}, url=${maskDatabaseUrl(connectionString)}):`, connectErr);
+    logSystemError(null, connectErr, {
+      errorCode: "TENANT_DATABASE_CONNECT_FAILED",
+      tenant: normKey,
+      targetDb: resolveTenantDatabaseName(normKey),
+      maskedUrl: maskDatabaseUrl(connectionString),
+    });
+    // プールを安全に破棄
+    await pool.end().catch(() => {});
+    throw new TenantDatabaseUnavailableError(
+      `テナントデータベース "${resolveTenantDatabaseName(normKey)}" への接続に失敗しました。`,
+      "TENANT_DATABASE_CONNECT_FAILED"
+    );
+  }
 
   tenantPoolCache.set(normKey, { pool, connectionString });
   return pool;

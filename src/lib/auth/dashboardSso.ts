@@ -125,11 +125,11 @@ export function verifyDashboardToken(token: string, expectedTenantKey?: string):
   const username = String(decoded.username || decoded.preferred_username || decoded.name || "").trim();
   const role = normalizeRole(decoded.role || decoded.roles || decoded.roleCodes || decoded.legacyRole || decoded.legacy_role);
   const displayName = String(decoded.displayName || decoded.display_name || decoded.name || username || "ユーザー").trim();
+  // ユーザー名による特例付与を完全廃止。Dashboardが署名したトークンのroleおよびis_super_adminクレームのみで厳格判定
   const isSuperAdmin = Boolean(
-    decoded.is_super_admin ||
-    decoded.isSuperAdmin ||
-    role === "system_admin" ||
-    username.toLowerCase() === "niina"
+    decoded.is_super_admin === true ||
+    decoded.isSuperAdmin === true ||
+    role === "system_admin"
   );
 
   return {

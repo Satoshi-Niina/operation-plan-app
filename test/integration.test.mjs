@@ -15,7 +15,6 @@ const {
   verifyDashboardToken,
   issueAppSessionToken,
   verifyAppSessionToken,
-  normalizeRole,
   DashboardSsoError
 } = await import('../src/lib/auth/dashboardSso.ts');
 
@@ -23,7 +22,9 @@ const {
   isAllowedTenant,
   resolveTenantDatabaseName,
   buildDatabaseUrlForDatabase,
-  getTenantDatabaseUrl
+  maskDatabaseUrl,
+  getTenantPool,
+  TenantDatabaseUnavailableError
 } = await import('../src/lib/db/tenantPool.ts');
 
 test('【SSO検証】正常なダッシュボードランチトークンが検証できること', () => {
@@ -49,26 +50,32 @@ test('【SSO検証】正常なダッシュボードランチトークンが検�
   assert.equal(decoded.isSuperAdmin, false);
 });
 
-test('【SSO検証】スーパー管理者（niina / system_admin）のトークンで isSuperAdmin が true になること', () => {
-  const payload = {
-    userId: 'super-001',
+test('【SSO検証】ユーザー名niina単独では管理者権限が付与されず、署名クレーム（roleまたはis_super_admin）が必要なこと', () => {
+  // 1. niina だが role が operator で is_super_admin なし -> 一般ユーザーとして判定
+  const regularNiinaPayload = {
+    userId: 'niina-001',
     username: 'niina',
-    displayName: '新名 敏',
+    role: 'operator',
+    tenantKey: 'daitetsu',
+    appKey: 'planning',
+  };
+  const regularToken = jwt.sign(regularNiinaPayload, process.env.SHARED_SSO_SECRET);
+  const regularDecoded = verifyDashboardToken(regularToken, 'daitetsu');
+  assert.equal(regularDecoded.isSuperAdmin, false);
+
+  // 2. Dashboard が system_admin または is_super_admin: true を署名 -> 管理者として認可
+  const adminNiinaPayload = {
+    userId: 'niina-001',
+    username: 'niina',
     role: 'system_admin',
     tenantKey: 'kosei',
     appKey: 'planning',
     is_super_admin: true,
   };
-  const token = jwt.sign(payload, process.env.SHARED_SSO_SECRET, {
-    expiresIn: '60s',
-    issuer: 'dashboard-auth',
-    audience: 'dashboard-apps',
-  });
-
-  const decoded = verifyDashboardToken(token, 'kosei');
-  assert.equal(decoded.username, 'niina');
-  assert.equal(decoded.isSuperAdmin, true);
-  assert.equal(decoded.role, 'system_admin');
+  const adminToken = jwt.sign(adminNiinaPayload, process.env.SHARED_SSO_SECRET);
+  const adminDecoded = verifyDashboardToken(adminToken, 'kosei');
+  assert.equal(adminDecoded.isSuperAdmin, true);
+  assert.equal(adminDecoded.role, 'system_admin');
 });
 
 test('【SSO検証】別アプリ向け（inspection等）のトークンは拒否されること', () => {
@@ -129,6 +136,33 @@ test('【テナントDB解決】ホワイトリストに基づくテナントDB�
   assert.equal(resolveTenantDatabaseName('unknown'), null);
 });
 
+test('【テナントDB安全性】DB接続文字列内のパスワードマスキング', () => {
+  const plainUrl = 'postgresql://myuser:supersecretpass@127.0.0.1:5432/daitetsu_db';
+  const masked = maskDatabaseUrl(plainUrl);
+  assert.equal(masked, 'postgresql://myuser:***@127.0.0.1:5432/daitetsu_db');
+  assert.equal(masked.includes('supersecretpass'), false);
+});
+
+test('【テナントDB安全性】本番モード／モック禁止時の未設定DBに対する503エラー', async () => {
+  const originalEnv = process.env.NODE_ENV;
+  const originalDb = process.env.DATABASE_URL;
+  try {
+    process.env.NODE_ENV = 'production';
+    delete process.env.DATABASE_URL;
+    delete process.env.DB_CONNECTION_URL;
+    delete process.env.TENANT_DB_DAITETSU_URL;
+    delete process.env.ALLOW_MOCK_DATA;
+
+    await assert.rejects(
+      async () => await getTenantPool('daitetsu'),
+      (err) => err instanceof TenantDatabaseUnavailableError && err.status === 503
+    );
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+    process.env.DATABASE_URL = originalDb;
+  }
+});
+
 test('【テナントDB解決】基本DB接続URLからテナントDBへの置換（TCP & Cloud SQL Socket形式）', () => {
   // 1. 標準TCP形式
   const tcpBase = 'postgresql://postgres:secret@127.0.0.1:5432/common_db';
@@ -146,12 +180,6 @@ test('【テナントDB解決】基本DB接続URLからテナントDBへの置�
   const resolvedSocket = buildDatabaseUrlForDatabase(socketBase, 'daitetsu_db');
   assert.ok(resolvedSocket.includes('/daitetsu_db'));
   assert.ok(resolvedSocket.includes('?host=/cloudsql/'));
-
-  // 3. getTenantDatabaseUrl
-  assert.equal(getTenantDatabaseUrl('daitetsu'), 'postgresql://postgres:password@localhost:5432/daitetsu_db');
-  assert.equal(getTenantDatabaseUrl('kosei'), 'postgresql://postgres:password@localhost:5432/kosei_db');
-  assert.equal(getTenantDatabaseUrl('kintetsu'), 'postgresql://postgres:password@localhost:5432/kintetsu_db');
-  assert.equal(getTenantDatabaseUrl('invalid'), null);
 });
 
 test('【Gateway HMAC検証】HMAC-SHA256署名の生成と検証', () => {

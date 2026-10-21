@@ -158,16 +158,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(authUrl);
   }
 
-  // スーパー管理者（niina / system_admin / isSuperAdmin）は全テナントへのアクセスを認可
-  const isSuperAdmin = Boolean(
-    session.isSuperAdmin ||
-    session.role === "system_admin" ||
-    String(session.username || "").toLowerCase() === "niina"
-  );
-
+  // 3. テナントルートの認証・認可チェック
+  // URLのテナント名と、認証済みセッションのtenantKeyが完全一致することを全ユーザー（スーパー管理者含む）に要求
+  // URLの手動書き換えによる別テナントDBへの不正アクセスを完全に遮断する
   const isTenantMatch = String(session.tenantKey || "").toLowerCase() === tenant.toLowerCase();
 
-  if (!isSuperAdmin && !isTenantMatch) {
+  if (!isTenantMatch) {
     logAuthzDenied(request, {
       targetResource: pathname,
       reason: "tenant_mismatch",
@@ -177,7 +173,10 @@ export async function middleware(request: NextRequest) {
       actualTenant: session.tenantKey,
     });
     if (isApiRoute) {
-      return NextResponse.json({ error: "テナントが一致しません" }, { status: 403 });
+      return NextResponse.json(
+        { error: "テナントが一致しません。ダッシュボードから該当テナントを選択してアプリを起動してください。" },
+        { status: 403 }
+      );
     }
     const deniedUrl = request.nextUrl.clone();
     deniedUrl.pathname = "/access-denied";

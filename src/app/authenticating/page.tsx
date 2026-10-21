@@ -59,7 +59,7 @@ export default function AuthenticatingPage() {
       setStatus("exchanging");
 
       try {
-        const response = await fetch("/api/auth/external", {
+        const response = await fetch("/planning/api/auth/external", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token, tenantKey: tenantId }),
@@ -81,9 +81,9 @@ export default function AuthenticatingPage() {
         // リダイレクト先の決定
         const effectiveTenant = result.tenantKey || tenantId || "daitetsu";
         const nextParam = searchParams.get("next");
-        const nextUrl = nextParam && nextParam.startsWith(`/${effectiveTenant}`)
-          ? nextParam
-          : `/${effectiveTenant}/planning`;
+        const nextUrl = nextParam && nextParam.includes(`/${effectiveTenant}`)
+          ? (nextParam.startsWith("/planning") ? nextParam : `/planning${nextParam}`)
+          : `/planning/${effectiveTenant}/planning`;
 
         window.setTimeout(() => {
           window.location.replace(nextUrl);
