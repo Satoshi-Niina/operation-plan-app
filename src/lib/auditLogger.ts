@@ -14,7 +14,7 @@ const REDACTED = "[REDACTED]";
 // キー名に含まれていたら値を出力しない（認証クレデンシャル類）
 const SENSITIVE_KEY = /(password|passwd|passphrase|pwd|secret|token|authorization|cookie|credential|api[-_]?key|private[-_]?key|jwt|signature)/iu;
 
-type AuditLogSink = ((entry: any) => void) | null;
+type AuditLogSink = ((entry: Record<string, unknown>) => void) | null;
 let sink: AuditLogSink = null;
 
 export function setAuditLogSink(fn: AuditLogSink) {
@@ -27,13 +27,13 @@ function installStreamGuard() {
   streamGuardInstalled = true;
   if (typeof process !== "undefined") {
     for (const stream of [process.stdout, process.stderr]) {
-      (stream as any)?.on?.("error", () => { });
+      (stream as unknown as { on?: (event: string, handler: () => void) => void })?.on?.("error", () => { });
     }
   }
 }
 
-function redactString(value: any, max = MAX_STRING): string {
-  const text = String(value)
+function redactString(value: unknown, max = MAX_STRING): string {
+  const text = String(value ?? "")
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]")
     .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/gu, "[REDACTED_JWT]")
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^@\s/]+@/giu, "$1[REDACTED]@")
@@ -45,7 +45,7 @@ function maxLengthForKey(key: string): number {
   return key === "stack_trace" ? MAX_STACK : MAX_STRING;
 }
 
-function sanitize(value: any, depth = 0, seen = new WeakSet(), key = ""): any {
+function sanitize(value: unknown, depth = 0, seen = new WeakSet(), key = ""): unknown {
   if (value === null || value === undefined) return value === undefined ? undefined : null;
 
   switch (typeof value) {
@@ -66,7 +66,7 @@ function sanitize(value: any, depth = 0, seen = new WeakSet(), key = ""): any {
 
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
   if (value instanceof Error) {
-    return { name: value.name, message: redactString(value.message || ""), code: (value as any).code ?? null };
+    return { name: value.name, message: redactString(value.message || ""), code: (value as unknown as { code?: unknown }).code ?? null };
   }
   if (depth >= MAX_DEPTH) return "[MaxDepth]";
   if (typeof value === "object" && value !== null) {
@@ -77,7 +77,7 @@ function sanitize(value: any, depth = 0, seen = new WeakSet(), key = ""): any {
       return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitize(item, depth + 1, seen));
     }
 
-    const output: Record<string, any> = {};
+    const output: Record<string, unknown> = {};
     for (const [childKey, childValue] of Object.entries(value)) {
       if (SENSITIVE_KEY.test(childKey)) {
         output[childKey] = childValue === null || childValue === undefined ? null : REDACTED;
@@ -91,13 +91,13 @@ function sanitize(value: any, depth = 0, seen = new WeakSet(), key = ""): any {
   return String(value);
 }
 
-function cleanIdentifier(value: any, max = MAX_IDENTIFIER): string | null {
+function cleanIdentifier(value: unknown, max = MAX_IDENTIFIER): string | null {
   if (value === null || value === undefined) return null;
   const text = String(value).replace(/[\u0000-\u001f\u007f]/gu, "").trim();
   return text ? text.slice(0, max) : null;
 }
 
-function normalizeIp(raw: any): string {
+function normalizeIp(raw: unknown): string {
   let text = String(raw || "").trim();
   if (!text) return "";
   text = text.replace(/^\[|\]$/gu, "");
@@ -105,16 +105,30 @@ function normalizeIp(raw: any): string {
   return text.replace(/^::ffff:/iu, "");
 }
 
-export function extractClientIp(req: any): string | null {
+type RequestLike = {
+  headers?: { get?: (name: string) => string | null } | Record<string, string | string[] | undefined>;
+  ip?: string;
+  socket?: { remoteAddress?: string };
+  connection?: { remoteAddress?: string };
+  user?: { userId?: string; id?: string; role?: string; roles?: string[] };
+  method?: string;
+  nextUrl?: { pathname?: string };
+  originalUrl?: string;
+  url?: string;
+  body?: { deviceId?: string; device_id?: string };
+};
+
+export function extractClientIp(req: unknown): string | null {
   try {
     if (!req) return null;
-    const headerValue = typeof req.headers?.get === "function"
-      ? req.headers.get("x-forwarded-for")
-      : req?.headers?.["x-forwarded-for"];
+    const r = req as RequestLike;
+    const headerValue = typeof r.headers?.get === "function"
+      ? r.headers.get("x-forwarded-for")
+      : (r.headers as Record<string, unknown>)?.["x-forwarded-for"];
     const first = normalizeIp(String(Array.isArray(headerValue) ? headerValue[0] : headerValue || "").split(",")[0]);
     if (first) return first;
 
-    const direct = req?.ip || req?.socket?.remoteAddress || req?.connection?.remoteAddress;
+    const direct = r.ip || r.socket?.remoteAddress || r.connection?.remoteAddress;
     const directNorm = normalizeIp(direct);
     return directNorm || null;
   } catch {
@@ -122,35 +136,39 @@ export function extractClientIp(req: any): string | null {
   }
 }
 
-export function extractDeviceId(req: any): string | null {
+export function extractDeviceId(req: unknown): string | null {
   try {
     if (!req) return null;
-    const header = typeof req.headers?.get === "function"
-      ? req.headers.get("x-device-id")
-      : req?.headers?.["x-device-id"];
-    return cleanIdentifier(header ?? req?.body?.deviceId ?? req?.body?.device_id);
+    const r = req as RequestLike;
+    const header = typeof r.headers?.get === "function"
+      ? r.headers.get("x-device-id")
+      : (r.headers as Record<string, unknown>)?.["x-device-id"];
+    return cleanIdentifier(header ?? r.body?.deviceId ?? r.body?.device_id);
   } catch {
     return null;
   }
 }
 
-export function describeRequestPath(req: any): string {
+export function describeRequestPath(req: unknown): string {
   try {
     if (!req) return "";
-    const raw = req?.nextUrl?.pathname || req?.originalUrl || req?.url || "";
+    const r = req as RequestLike;
+    const raw = r.nextUrl?.pathname || r.originalUrl || r.url || "";
     return String(raw).split("?")[0].slice(0, 200);
   } catch {
     return "";
   }
 }
 
-function describeTarget(req: any): string | null {
-  const method = req?.method ? `${req.method} ` : "";
+function describeTarget(req: unknown): string | null {
+  const r = req as RequestLike;
+  const method = r?.method ? `${r.method} ` : "";
   return `${method}${describeRequestPath(req)}`.trim() || null;
 }
 
-function resolveUserRole(req: any): string | null {
-  const role = req?.user?.role || (Array.isArray(req?.user?.roles) ? req.user.roles[0] : null);
+function resolveUserRole(req: unknown): string | null {
+  const r = req as RequestLike;
+  const role = r?.user?.role || (Array.isArray(r?.user?.roles) ? r.user.roles[0] : null);
   return cleanIdentifier(role);
 }
 
@@ -158,19 +176,20 @@ export interface AuditLogOptions {
   severity: "INFO" | "WARNING" | "ERROR";
   eventType: "auth" | "authz_denied" | "operation" | "system_error";
   message: string;
-  details?: Record<string, any>;
-  req?: any;
+  details?: Record<string, unknown>;
+  req?: unknown;
   userId?: string | null;
 }
 
 function buildEntry({ severity, eventType, message, details, req, userId }: AuditLogOptions) {
+  const r = req as RequestLike;
   return {
     timestamp: new Date().toISOString(),
     severity,
     app_name: APP_NAME,
     event_type: eventType,
     client_ip: extractClientIp(req),
-    user_id: userId !== undefined ? cleanIdentifier(userId) : cleanIdentifier(req?.user?.userId || req?.user?.id),
+    user_id: userId !== undefined ? cleanIdentifier(userId) : cleanIdentifier(r?.user?.userId || r?.user?.id),
     device_id: extractDeviceId(req),
     message: redactString(message ?? "", 1000),
     details: sanitize(details ?? {}) || {},
@@ -183,7 +202,7 @@ export function writeAuditLog(options: AuditLogOptions) {
 
     const entry = buildEntry(options);
     if (sink) {
-      sink(entry);
+      sink(entry as Record<string, unknown>);
       return entry;
     }
 
@@ -214,36 +233,36 @@ export function writeAuditLog(options: AuditLogOptions) {
 }
 
 // ① 認証イベント
-export function logAuthSuccess(req: any, { userId, username, method = "sso", ...extra }: any = {}) {
+export function logAuthSuccess(req: unknown, { userId, username, method = "sso", ...extra }: Record<string, unknown> = {}) {
   return writeAuditLog({
     severity: "INFO",
     eventType: "auth",
     message: "ログイン成功",
     req,
-    userId,
+    userId: userId as string | undefined,
     details: { method, username, ...extra },
   });
 }
 
-export function logAuthFailure(req: any, { attemptedUserId = null, method = "sso", failureDetail, ...extra }: any = {}) {
+export function logAuthFailure(req: unknown, { attemptedUserId = null, method = "sso", failureDetail, ...extra }: Record<string, unknown> = {}) {
   return writeAuditLog({
     severity: "WARNING",
     eventType: "auth",
     message: "ログイン失敗",
     req,
-    userId: attemptedUserId,
+    userId: attemptedUserId as string | null,
     details: { reason: "invalid_credentials", method, failure_detail: failureDetail, ...extra },
   });
 }
 
 // ② 権限・認可イベント
-export function logAuthzDenied(req: any, { targetResource, requiredRole = null, userRole, userId, ...extra }: any = {}) {
+export function logAuthzDenied(req: unknown, { targetResource, requiredRole = null, userRole, userId, ...extra }: Record<string, unknown> = {}) {
   return writeAuditLog({
     severity: "WARNING",
     eventType: "authz_denied",
     message: "権限拒否",
     req,
-    userId,
+    userId: userId as string | undefined,
     details: {
       target_resource: targetResource ?? describeTarget(req),
       required_role: requiredRole,
@@ -254,7 +273,7 @@ export function logAuthzDenied(req: any, { targetResource, requiredRole = null, 
 }
 
 // ③ 主要操作イベント
-export function logOperation(req: any, { action, targetId = null, status = "success", targetType, ...extra }: any = {}) {
+export function logOperation(req: unknown, { action, targetId = null, status = "success", targetType, ...extra }: Record<string, unknown> = {}) {
   return writeAuditLog({
     severity: "INFO",
     eventType: "operation",
@@ -271,18 +290,20 @@ export function logOperation(req: any, { action, targetId = null, status = "succ
 }
 
 // ④ システムエラー・例外
-export function logSystemError(req: any, error: any, { errorCode, ...extra }: any = {}) {
+export function logSystemError(req: unknown, error: unknown, { errorCode, ...extra }: Record<string, unknown> = {}) {
   try {
     const isError = error instanceof Error;
+    const errObj = error as { code?: unknown; name?: string };
+    const r = req as RequestLike;
     return writeAuditLog({
       severity: "ERROR",
       eventType: "system_error",
       message: (isError ? error.message : String(error ?? "")) || "unknown error",
       req,
       details: {
-        error_code: errorCode ?? error?.code ?? (isError ? error.name : null) ?? "UNKNOWN_ERROR",
+        error_code: errorCode ?? errObj?.code ?? (isError ? error.name : null) ?? "UNKNOWN_ERROR",
         stack_trace: isError ? error.stack : null,
-        method: req?.method ?? null,
+        method: r?.method ?? null,
         path: req ? describeRequestPath(req) : null,
         ...extra,
       },
@@ -291,3 +312,4 @@ export function logSystemError(req: any, error: any, { errorCode, ...extra }: an
     return null;
   }
 }
+

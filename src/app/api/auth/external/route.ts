@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
       displayName: decoded.displayName || decoded.username || "",
       role: decoded.role || "operator",
       tenantKey: decoded.tenantKey || "",
+      isSuperAdmin: decoded.isSuperAdmin,
     });
 
     logAuthSuccess(request, {

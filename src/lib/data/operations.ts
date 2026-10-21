@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { getTenantPool } from "@/lib/db/tenantPool";
 import { inspectionActuals, inspectionRules, maintenanceBases, maintenanceOffices, officeBases as mockOfficeBases, operationPlans, vehicleInspectionMasters, vehicleMasters } from "@/lib/mock/operations";
 import { InspectionActual, InspectionRule, OperationPlan, VehicleInspectionMaster, VehicleMaster } from "@/types/operation";
 
@@ -15,17 +15,20 @@ export type TenantOperations = {
   inspectionActuals: InspectionActual[];
 };
 
-const globalForDatabase = globalThis as typeof globalThis & { operationPool?: Pool };
-
-function database() {
-  if (!process.env.DATABASE_URL) return null;
-  globalForDatabase.operationPool ??= new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined });
-  return globalForDatabase.operationPool;
-}
-
 export async function getTenantOperations(tenant: string): Promise<TenantOperations> {
-  const pool = database();
-  if (!pool) return { plans: operationPlans, offices: maintenanceOffices, bases: maintenanceBases, officeBases: mockOfficeBases, vehicles: vehicleMasters, inspectionMasters: vehicleInspectionMasters, inspectionRules, inspectionActuals };
+  const pool = await getTenantPool(tenant);
+  if (!pool) {
+    return {
+      plans: operationPlans,
+      offices: maintenanceOffices,
+      bases: maintenanceBases,
+      officeBases: mockOfficeBases,
+      vehicles: vehicleMasters,
+      inspectionMasters: vehicleInspectionMasters,
+      inspectionRules,
+      inspectionActuals,
+    };
+  }
 
   const [plansResult, officesResult, basesResult, officeBasesResult, vehiclesResult, mastersResult, rulesResult, actualsResult] = await Promise.all([
     pool.query<StoredPlan>("SELECT id, date, office, model, machine_number AS \"machineNumber\", work, operator, start_time AS \"startTime\", end_time AS \"endTime\", status, note, departure_base AS \"departureBase\", arrival_base AS \"arrivalBase\", time_band AS \"timeBand\" FROM operation_plans WHERE tenant_slug = $1 ORDER BY date, machine_number", [tenant]),
@@ -42,7 +45,7 @@ export async function getTenantOperations(tenant: string): Promise<TenantOperati
 }
 
 export async function saveOperationPlan(tenant: string, plan: StoredPlan) {
-  const pool = database();
+  const pool = await getTenantPool(tenant);
   if (!pool) return plan;
   await pool.query(
     `INSERT INTO operation_plans (id, tenant_slug, date, office, model, machine_number, work, operator, start_time, end_time, status, note, departure_base, arrival_base, time_band)
@@ -54,7 +57,7 @@ export async function saveOperationPlan(tenant: string, plan: StoredPlan) {
 }
 
 export async function deleteOperationPlan(tenant: string, id: string) {
-  const pool = database();
+  const pool = await getTenantPool(tenant);
   if (!pool) return;
   await pool.query("DELETE FROM operation_plans WHERE tenant_slug = $1 AND id = $2", [tenant, id]);
 }
