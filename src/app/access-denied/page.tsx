@@ -1,8 +1,9 @@
 "use client";
 
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
-export default function AccessDeniedPage() {
+function AccessDeniedContent() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
 
@@ -58,35 +59,33 @@ export default function AccessDeniedPage() {
           width: "48px",
           height: "48px",
           margin: "0 auto 16px",
-          backgroundColor: "#ef4444",
           borderRadius: "50%",
+          backgroundColor: "#ef444420",
+          color: "#ef4444",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           fontSize: "24px"
         }}>
-          !
+          ⚠️
         </div>
-
-        <h1 style={{ fontSize: "1.25rem", fontWeight: "bold", marginBottom: "12px" }}>
+        <h1 style={{ fontSize: "20px", fontWeight: "bold", marginBottom: "12px", color: "#f8fafc" }}>
           {details.title}
         </h1>
-
-        <p style={{ color: "#94a3b8", fontSize: "0.875rem", lineHeight: "1.6", marginBottom: "24px" }}>
+        <p style={{ fontSize: "14px", color: "#94a3b8", lineHeight: "1.6", marginBottom: "24px" }}>
           {details.message}
         </p>
-
         <a
           href={dashboardUrl}
           style={{
             display: "inline-block",
             backgroundColor: "#2563eb",
-            color: "#ffffff",
-            padding: "10px 24px",
+            color: "white",
+            padding: "10px 20px",
             borderRadius: "6px",
             textDecoration: "none",
-            fontSize: "0.875rem",
-            fontWeight: 500
+            fontWeight: "500",
+            fontSize: "14px"
           }}
         >
           ダッシュボードへ戻る
@@ -95,3 +94,12 @@ export default function AccessDeniedPage() {
     </div>
   );
 }
+
+export default function AccessDeniedPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh", backgroundColor: "#0f172a" }} />}>
+      <AccessDeniedContent />
+    </Suspense>
+  );
+}
+

@@ -25,10 +25,12 @@ let streamGuardInstalled = false;
 function installStreamGuard() {
   if (streamGuardInstalled) return;
   streamGuardInstalled = true;
-  if (typeof process !== "undefined") {
-    for (const stream of [process.stdout, process.stderr]) {
-      (stream as unknown as { on?: (event: string, handler: () => void) => void })?.on?.("error", () => { });
-    }
+  try {
+    const proc = (globalThis as unknown as { process?: { stdout?: { on?: (event: string, handler: () => void) => void }, stderr?: { on?: (event: string, handler: () => void) => void } } }).process;
+    if (proc?.stdout?.on) proc.stdout.on("error", () => { });
+    if (proc?.stderr?.on) proc.stderr.on("error", () => { });
+  } catch {
+    // Edge Runtime 等では何もしない
   }
 }
 
@@ -222,9 +224,11 @@ export function writeAuditLog(options: AuditLogOptions) {
     }
 
     if (entry.severity === "ERROR") {
-      process.stderr.write(`${line}\n`);
+      console.error(line);
+    } else if (entry.severity === "WARNING") {
+      console.warn(line);
     } else {
-      process.stdout.write(`${line}\n`);
+      console.log(line);
     }
     return entry;
   } catch {

@@ -27,7 +27,7 @@ const {
   TenantDatabaseUnavailableError
 } = await import('../src/lib/db/tenantPool.ts');
 
-test('【SSO検証】正常なダッシュボードランチトークンが検証できること', () => {
+test('【SSO検証】正常なダッシュボードランチトークンが検証できること', async () => {
   const payload = {
     userId: 'user-001',
     username: 'yamada',
@@ -42,7 +42,7 @@ test('【SSO検証】正常なダッシュボードランチトークンが検�
     audience: 'dashboard-apps',
   });
 
-  const decoded = verifyDashboardToken(token, 'daitetsu');
+  const decoded = await verifyDashboardToken(token, 'daitetsu');
   assert.equal(decoded.userId, 'user-001');
   assert.equal(decoded.username, 'yamada');
   assert.equal(decoded.tenantKey, 'daitetsu');
@@ -50,7 +50,7 @@ test('【SSO検証】正常なダッシュボードランチトークンが検�
   assert.equal(decoded.isSuperAdmin, false);
 });
 
-test('【SSO検証】ユーザー名niina単独では管理者権限が付与されず、署名クレーム（roleまたはis_super_admin）が必要なこと', () => {
+test('【SSO検証】ユーザー名niina単独では管理者権限が付与されず、署名クレーム（roleまたはis_super_admin）が必要なこと', async () => {
   // 1. niina だが role が operator で is_super_admin なし -> 一般ユーザーとして判定
   const regularNiinaPayload = {
     userId: 'niina-001',
@@ -60,7 +60,7 @@ test('【SSO検証】ユーザー名niina単独では管理者権限が付与さ
     appKey: 'planning',
   };
   const regularToken = jwt.sign(regularNiinaPayload, process.env.SHARED_SSO_SECRET);
-  const regularDecoded = verifyDashboardToken(regularToken, 'daitetsu');
+  const regularDecoded = await verifyDashboardToken(regularToken, 'daitetsu');
   assert.equal(regularDecoded.isSuperAdmin, false);
 
   // 2. Dashboard が system_admin または is_super_admin: true を署名 -> 管理者として認可
@@ -73,12 +73,12 @@ test('【SSO検証】ユーザー名niina単独では管理者権限が付与さ
     is_super_admin: true,
   };
   const adminToken = jwt.sign(adminNiinaPayload, process.env.SHARED_SSO_SECRET);
-  const adminDecoded = verifyDashboardToken(adminToken, 'kosei');
+  const adminDecoded = await verifyDashboardToken(adminToken, 'kosei');
   assert.equal(adminDecoded.isSuperAdmin, true);
   assert.equal(adminDecoded.role, 'system_admin');
 });
 
-test('【SSO検証】別アプリ向け（inspection等）のトークンは拒否されること', () => {
+test('【SSO検証】別アプリ向け（inspection等）のトークンは拒否されること', async () => {
   const payload = {
     userId: 'user-001',
     username: 'yamada',
@@ -92,21 +92,21 @@ test('【SSO検証】別アプリ向け（inspection等）のトークンは拒�
     audience: 'dashboard-apps',
   });
 
-  assert.throws(
-    () => verifyDashboardToken(token, 'daitetsu'),
+  await assert.rejects(
+    async () => verifyDashboardToken(token, 'daitetsu'),
     (err) => err instanceof DashboardSsoError && err.status === 403
   );
 });
 
-test('【SSO検証】署名不正または期限切れトークンは拒否されること', () => {
+test('【SSO検証】署名不正または期限切れトークンは拒否されること', async () => {
   const badToken = jwt.sign({ username: 'hacker' }, 'wrong-secret');
-  assert.throws(
-    () => verifyDashboardToken(badToken),
+  await assert.rejects(
+    async () => verifyDashboardToken(badToken),
     (err) => err instanceof DashboardSsoError && err.status === 401
   );
 });
 
-test('【セッション管理】発行したセッションCookieトークンが正しく検証できること', () => {
+test('【セッション管理】発行したセッションCookieトークンが正しく検証できること', async () => {
   const session = {
     userId: 'user-001',
     username: 'yamada',
@@ -115,8 +115,8 @@ test('【セッション管理】発行したセッションCookieトークン�
     tenantKey: 'daitetsu',
     isSuperAdmin: false,
   };
-  const token = issueAppSessionToken(session);
-  const verified = verifyAppSessionToken(token);
+  const token = await issueAppSessionToken(session);
+  const verified = await verifyAppSessionToken(token);
   assert.ok(verified);
   assert.equal(verified.userId, 'user-001');
   assert.equal(verified.tenantKey, 'daitetsu');
@@ -182,14 +182,25 @@ test('【テナントDB解決】基本DB接続URLからテナントDBへの置�
   assert.ok(resolvedSocket.includes('?host=/cloudsql/'));
 });
 
-test('【Gateway HMAC検証】HMAC-SHA256署名の生成と検証', () => {
+test('【Gateway HMAC検証】HMAC-SHA256署名の生成とリプレイ攻撃防止検証', () => {
   const secret = process.env.INTERNAL_GATEWAY_SECRET;
-  const payload = JSON.stringify({ authorized: true, fingerprint256: 'abc123' });
-  const hmac = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  const token = Buffer.from(JSON.stringify({ payload, hmac })).toString('base64');
+  const now = Date.now();
+  
+  // 1. 正常なトークン (現在時刻)
+  const validPayload = JSON.stringify({ authorized: true, fingerprint256: 'abc123', issuedAt: now });
+  const validHmac = crypto.createHmac('sha256', secret).update(validPayload).digest('hex');
+  const validToken = Buffer.from(JSON.stringify({ payload: validPayload, hmac: validHmac })).toString('base64');
 
-  // 検証処理
-  const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
-  const calculatedHmac = crypto.createHmac('sha256', secret).update(decoded.payload).digest('hex');
-  assert.equal(decoded.hmac, calculatedHmac);
+  const decoded = JSON.parse(Buffer.from(validToken, 'base64').toString('utf8'));
+  const payloadObj = JSON.parse(decoded.payload);
+  assert.equal(Math.abs(Date.now() - payloadObj.issuedAt) < 300000, true);
+
+  // 2. 期限切れ（10分前）のリプレイ攻撃トークン
+  const expiredPayload = JSON.stringify({ authorized: true, fingerprint256: 'abc123', issuedAt: now - 600000 });
+  const expiredHmac = crypto.createHmac('sha256', secret).update(expiredPayload).digest('hex');
+  const expiredToken = Buffer.from(JSON.stringify({ payload: expiredPayload, hmac: expiredHmac })).toString('base64');
+
+  const expiredDecoded = JSON.parse(Buffer.from(expiredToken, 'base64').toString('utf8'));
+  const expiredObj = JSON.parse(expiredDecoded.payload);
+  assert.equal(Math.abs(Date.now() - expiredObj.issuedAt) < 300000, false, '10分前のトークンは拒否されること');
 });

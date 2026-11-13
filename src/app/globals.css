@@ -39,3 +39,14 @@ a {
   text-decoration: none;
 }
 
+@page {
+  size: A3 landscape;
+  margin: 10mm;
+}
+
+@media print {
+  body > *:not(.print-preview-modal) {
+    display: none !important;
+  }
+}
+

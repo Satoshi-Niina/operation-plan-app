@@ -1,61 +1,84 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function AuthenticatingPage() {
+function AuthenticatingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<"connecting" | "exchanging" | "success" | "error">("connecting");
   const [errorMessage, setErrorMessage] = useState<string>("");
 
   useEffect(() => {
-    // 1. window.opener がない場合（直接アクセス時）
-    if (!window.opener || window.opener.closed) {
-      queueMicrotask(() => {
-        setStatus("error");
-        setErrorMessage("ダッシュボードからの起動情報が見つかりません。ダッシュボードからアプリを起動してください。");
-      });
-      return;
+    const targetOrigins = new Set<string>();
+    if (typeof window !== "undefined" && window.location.origin) {
+      targetOrigins.add(window.location.origin);
     }
-
-    const defaultDashboardOrigin = process.env.NEXT_PUBLIC_DASHBOARD_URL
-      ? new URL(process.env.NEXT_PUBLIC_DASHBOARD_URL).origin
-      : "http://localhost:3000";
-
-    let targetDashboardOrigin = defaultDashboardOrigin;
     if (document.referrer) {
       try {
-        targetDashboardOrigin = new URL(document.referrer).origin;
-      } catch {
-        targetDashboardOrigin = defaultDashboardOrigin;
-      }
+        targetOrigins.add(new URL(document.referrer).origin);
+      } catch {}
     }
+    if (process.env.NEXT_PUBLIC_DASHBOARD_URL) {
+      try {
+        targetOrigins.add(new URL(process.env.NEXT_PUBLIC_DASHBOARD_URL).origin);
+      } catch {}
+    }
+    targetOrigins.add("https://localhost:8443");
+    targetOrigins.add("http://localhost:3000");
 
     let isHandshakeSettled = false;
 
-    // 2. メッセージ受信ハンドラ
-    const handleMessage = async (event: MessageEvent) => {
-      // 送信元の検証
-      if (event.source !== window.opener) return;
-
-      const data = event.data || {};
-      const type = String(data.type || "");
-
-      if (type !== "EXTERNAL_AUTH_CONTEXT" && type !== "EXTERNAL_AUTH_TOKEN") return;
-
-      const token = String(data.token || data.auth_token || data.external_token || "").trim();
-      const tenantId = String(data.tenantId || data.tenant_id || searchParams.get("tenant") || "").trim();
-
-      if (!token) {
-        setStatus("error");
-        setErrorMessage("ダッシュボードから認証トークンを受信できませんでした。");
+    const sendAckToOpener = (replyOrigin?: string) => {
+      if (!window.opener || window.opener.closed) return;
+      if (replyOrigin) {
         try {
-          window.opener?.postMessage({ type: "EXTERNAL_AUTH_FAILED" }, event.origin);
+          window.opener.postMessage({ type: "EXTERNAL_AUTH_ACK" }, replyOrigin);
         } catch {}
-        return;
       }
+      for (const origin of targetOrigins) {
+        try {
+          window.opener.postMessage({ type: "EXTERNAL_AUTH_ACK" }, origin);
+        } catch {}
+      }
+    };
 
+    const sendFailedToOpener = (replyOrigin?: string) => {
+      if (!window.opener || window.opener.closed) return;
+      if (replyOrigin) {
+        try {
+          window.opener.postMessage({ type: "EXTERNAL_AUTH_FAILED" }, replyOrigin);
+        } catch {}
+      }
+      for (const origin of targetOrigins) {
+        try {
+          window.opener.postMessage({ type: "EXTERNAL_AUTH_FAILED" }, origin);
+        } catch {}
+      }
+    };
+
+    // 0. 既存セッションの確認（middlewareが既にCookieを発行している場合、即遷移）
+    fetch("/planning/api/auth/session")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && data.authenticated && data.tenantKey) {
+          isHandshakeSettled = true;
+          setStatus("success");
+          sendAckToOpener();
+
+          const nextParam = searchParams.get("next");
+          const nextUrl = nextParam && nextParam.includes(`/${data.tenantKey}`)
+            ? (nextParam.startsWith("/planning") ? nextParam : `/planning${nextParam}`)
+            : `/planning/${data.tenantKey}/planning`;
+          window.location.replace(nextUrl);
+        }
+      })
+      .catch(() => {});
+
+    // 認証交換処理の共通ロジック
+    const performAuthExchange = async (token: string, tenantId: string, replyOrigin?: string) => {
+      if (isHandshakeSettled) return;
+      isHandshakeSettled = true;
       setStatus("exchanging");
 
       try {
@@ -70,15 +93,15 @@ export default function AuthenticatingPage() {
           throw new Error(result.message || "認証交換に失敗しました");
         }
 
-        isHandshakeSettled = true;
         setStatus("success");
+        sendAckToOpener(replyOrigin);
 
-        // ダッシュボードへ完了通知
-        try {
-          window.opener?.postMessage({ type: "EXTERNAL_AUTH_ACK" }, event.origin);
-        } catch {}
+        if (window.location.hash) {
+          try {
+            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          } catch {}
+        }
 
-        // リダイレクト先の決定
         const effectiveTenant = result.tenantKey || tenantId || "daitetsu";
         const nextParam = searchParams.get("next");
         const nextUrl = nextParam && nextParam.includes(`/${effectiveTenant}`)
@@ -87,31 +110,80 @@ export default function AuthenticatingPage() {
 
         window.setTimeout(() => {
           window.location.replace(nextUrl);
-        }, 300);
+        }, 200);
       } catch (err) {
-        isHandshakeSettled = true;
         setStatus("error");
         const msg = err instanceof Error ? err.message : "認証連携中にエラーが発生しました";
         setErrorMessage(msg);
-        try {
-          window.opener?.postMessage({ type: "EXTERNAL_AUTH_FAILED" }, event.origin);
-        } catch {}
+        sendFailedToOpener(replyOrigin);
       }
+    };
+
+    // A. URLハッシュ/クエリからのトークン取得をまず試行（即時連携フォールバック）
+    let directToken = "";
+    let directTenant = "";
+    if (typeof window !== "undefined") {
+      if (window.location.hash) {
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        directToken = hashParams.get("token") || hashParams.get("auth_token") || "";
+        directTenant = hashParams.get("tenant") || hashParams.get("tenantId") || "";
+      }
+      if (!directToken) {
+        directToken = searchParams.get("token") || searchParams.get("auth_token") || "";
+        directTenant = searchParams.get("tenant") || "";
+      }
+
+      if (directToken) {
+        performAuthExchange(directToken, directTenant);
+      }
+    }
+
+    // B. window.opener の有無確認
+    const hasOpener = window.opener && !window.opener.closed;
+
+    // もし直接トークンもなく、かつ opener もない直接アクセスの場合はエラー表示
+    if (!directToken && !hasOpener) {
+      window.setTimeout(() => {
+        if (!isHandshakeSettled) {
+          setStatus("error");
+          setErrorMessage("ダッシュボードからの起動情報が見つかりません。ダッシュボードからアプリを起動してください。");
+        }
+      }, 1000);
+      return;
+    }
+
+    const handleMessage = async (event: MessageEvent) => {
+      const data = event.data || {};
+      const type = String(data.type || "");
+
+      if (type !== "EXTERNAL_AUTH_CONTEXT" && type !== "EXTERNAL_AUTH_TOKEN") return;
+
+      const token = String(data.token || data.auth_token || data.external_token || "").trim();
+      const tenantId = String(data.tenantId || data.tenant_id || searchParams.get("tenant") || "").trim();
+
+      if (!token) {
+        setStatus("error");
+        setErrorMessage("ダッシュボードから認証トークンを受信できませんでした。");
+        sendFailedToOpener(event.origin);
+        return;
+      }
+
+      performAuthExchange(token, tenantId, event.origin);
     };
 
     window.addEventListener("message", handleMessage);
 
-    // 3. ダッシュボードへ「準備完了（EXTERNAL_AUTH_READY）」を送信
     const sendReady = () => {
-      if (isHandshakeSettled) return;
-      try {
-        window.opener?.postMessage({ type: "EXTERNAL_AUTH_READY" }, targetDashboardOrigin);
-      } catch (err) {
-        console.warn("[authenticating] Failed to postMessage READY:", err);
+      if (isHandshakeSettled || !window.opener || window.opener.closed) return;
+      for (const origin of targetOrigins) {
+        try {
+          window.opener.postMessage({ type: "EXTERNAL_AUTH_READY" }, origin);
+        } catch (err) {
+          console.warn("[authenticating] Failed to postMessage READY to", origin, err);
+        }
       }
     };
 
-    // 初期送信と安全のための再送インターバル（1秒ごと最大5回）
     sendReady();
     const intervalId = window.setInterval(() => {
       if (!isHandshakeSettled) {
@@ -121,7 +193,6 @@ export default function AuthenticatingPage() {
       }
     }, 1000);
 
-    // 15秒でタイムアウト判定
     const timeoutId = window.setTimeout(() => {
       if (!isHandshakeSettled) {
         window.clearInterval(intervalId);
@@ -187,7 +258,7 @@ export default function AuthenticatingPage() {
 
         {status === "error" && (
           <a
-            href={process.env.NEXT_PUBLIC_DASHBOARD_URL || "http://localhost:3000"}
+            href={typeof window !== "undefined" && window.location.origin ? `${window.location.origin}/` : (process.env.NEXT_PUBLIC_DASHBOARD_URL || "http://localhost:3000")}
             style={{
               display: "inline-block",
               backgroundColor: "#2563eb",
@@ -204,5 +275,13 @@ export default function AuthenticatingPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AuthenticatingPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh", backgroundColor: "#0f172a" }} />}>
+      <AuthenticatingContent />
+    </Suspense>
   );
 }

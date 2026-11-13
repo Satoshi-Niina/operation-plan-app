@@ -32,9 +32,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const decoded = verifyDashboardToken(token, requestedTenantKey || undefined);
+    const decoded = await verifyDashboardToken(token, requestedTenantKey || undefined);
 
-    const sessionToken = issueAppSessionToken({
+    const sessionToken = await issueAppSessionToken({
       userId: decoded.userId || "",
       username: decoded.username || "",
       displayName: decoded.displayName || decoded.username || "",

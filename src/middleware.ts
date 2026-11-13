@@ -36,6 +36,17 @@ async function verifyGatewayHmac(authHeader: string, secret: string): Promise<bo
     const { payload, hmac } = parsed;
     if (!payload || !hmac) return false;
 
+    // リプレイ攻撃対策: issuedAt タイムスタンプの有効期限（5分以内）検証
+    const parsedPayload = typeof payload === "string" ? JSON.parse(payload) : payload;
+    const issuedAt = Number(parsedPayload?.issuedAt);
+    if (!issuedAt || Number.isNaN(issuedAt)) return false;
+
+    const now = Date.now();
+    const MAX_ALLOWED_SKEW_MS = 5 * 60 * 1000; // 5分
+    if (Math.abs(now - issuedAt) > MAX_ALLOWED_SKEW_MS) {
+      return false; // 有効期限切れまたはリプレイ攻撃
+    }
+
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey(
       "raw",
@@ -44,11 +55,20 @@ async function verifyGatewayHmac(authHeader: string, secret: string): Promise<bo
       false,
       ["sign"]
     );
-    const signature = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
+    const rawPayload = typeof payload === "string" ? payload : JSON.stringify(payload);
+    const signature = await crypto.subtle.sign("HMAC", key, enc.encode(rawPayload));
     const expectedHmac = Array.from(new Uint8Array(signature))
       .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    return expectedHmac.toLowerCase() === String(hmac).toLowerCase();
+      .join("")
+      .toLowerCase();
+    const receivedHmac = String(hmac).toLowerCase();
+
+    if (expectedHmac.length !== receivedHmac.length) return false;
+    let diff = 0;
+    for (let i = 0; i < expectedHmac.length; i++) {
+      diff |= expectedHmac.charCodeAt(i) ^ receivedHmac.charCodeAt(i);
+    }
+    return diff === 0;
   } catch {
     return false;
   }
@@ -92,8 +112,8 @@ export async function middleware(request: NextRequest) {
   const urlToken = searchParams.get("auth_token") || searchParams.get("token");
   if (urlToken) {
     try {
-      const decoded = verifyDashboardToken(urlToken, tenant || undefined);
-      const sessionToken = issueAppSessionToken({
+      const decoded = await verifyDashboardToken(urlToken, tenant || undefined);
+      const sessionToken = await issueAppSessionToken({
         userId: decoded.userId || "",
         username: decoded.username || "",
         displayName: decoded.displayName || decoded.username || "",
@@ -114,6 +134,13 @@ export async function middleware(request: NextRequest) {
       const cleanUrl = request.nextUrl.clone();
       cleanUrl.searchParams.delete("auth_token");
       cleanUrl.searchParams.delete("token");
+
+      if (cleanUrl.pathname === "/authenticating" || cleanUrl.pathname === "/authenticating/") {
+        const destTenant = decoded.tenantKey || tenant || "daitetsu";
+        cleanUrl.pathname = `/${destTenant}/planning`;
+        cleanUrl.searchParams.delete("tenant");
+        cleanUrl.searchParams.delete("next");
+      }
 
       const response = NextResponse.redirect(cleanUrl);
       response.cookies.set(sessionCookieName, sessionToken, {
@@ -137,7 +164,7 @@ export async function middleware(request: NextRequest) {
   if (!tenant) return NextResponse.next();
 
   const sessionCookie = request.cookies.get(sessionCookieName)?.value;
-  const session = sessionCookie ? verifyAppSessionToken(sessionCookie) : null;
+  const session = sessionCookie ? await verifyAppSessionToken(sessionCookie) : null;
 
   if (!session) {
     logAuthzDenied(request, {

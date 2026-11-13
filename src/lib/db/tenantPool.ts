@@ -81,6 +81,11 @@ export function getTenantDatabaseUrl(tenantKey: string): string | null {
     return envUrl.trim();
   }
 
+  // 本番環境（NODE_ENV === 'production'）では DB 接続URLの自動置換を使用しない構成とする
+  if (process.env.NODE_ENV === "production") {
+    return null;
+  }
+
   const baseUrl = process.env.DATABASE_URL || process.env.DB_CONNECTION_URL;
   if (!baseUrl || !baseUrl.trim()) {
     return null;

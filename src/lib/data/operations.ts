@@ -30,18 +30,42 @@ export async function getTenantOperations(tenant: string): Promise<TenantOperati
     };
   }
 
-  const [plansResult, officesResult, basesResult, officeBasesResult, vehiclesResult, mastersResult, rulesResult, actualsResult] = await Promise.all([
-    pool.query<StoredPlan>("SELECT id, date, office, model, machine_number AS \"machineNumber\", work, operator, start_time AS \"startTime\", end_time AS \"endTime\", status, note, departure_base AS \"departureBase\", arrival_base AS \"arrivalBase\", time_band AS \"timeBand\" FROM operation_plans WHERE tenant_slug = $1 ORDER BY date, machine_number", [tenant]),
-    pool.query<{ name: string }>("SELECT name FROM maintenance_offices WHERE tenant_slug = $1 ORDER BY name", [tenant]),
-    pool.query<{ name: string }>("SELECT name FROM maintenance_bases WHERE tenant_slug = $1 ORDER BY name", [tenant]),
-    pool.query<{ office: string; base: string }>("SELECT office_name AS office, base_name AS base FROM maintenance_office_bases WHERE tenant_slug = $1 ORDER BY office_name, base_name", [tenant]),
-    pool.query<VehicleMaster>("SELECT machine_number AS \"machineNumber\", model, office, home_base AS \"homeBase\" FROM maintenance_vehicles WHERE tenant_slug = $1 ORDER BY machine_number", [tenant]),
-    pool.query<VehicleInspectionMaster>("SELECT machine_number AS \"machineNumber\", model, category, inspection_base AS \"inspectionBase\" FROM vehicle_inspection_masters WHERE tenant_slug = $1 ORDER BY machine_number", [tenant]),
-    pool.query<InspectionRule>("SELECT category, inspection_type AS \"inspectionType\", phase_months AS \"phaseMonths\", interval_months AS \"intervalMonths\", inspection_days AS \"inspectionDays\" FROM inspection_rules ORDER BY category, phase_months", []),
-    pool.query<InspectionActual>("SELECT id, machine_number AS \"machineNumber\", completed_date AS \"completedDate\", phase_months AS \"phaseMonths\" FROM inspection_actuals WHERE tenant_slug = $1 ORDER BY completed_date DESC", [tenant]),
-  ]);
-  const officeBases = officeBasesResult.rows.reduce<Record<string, string[]>>((assignments, item) => ({ ...assignments, [item.office]: [...(assignments[item.office] ?? []), item.base] }), {});
-  return { plans: plansResult.rows, offices: officesResult.rows.map((office) => office.name), bases: basesResult.rows.map((base) => base.name), officeBases, vehicles: vehiclesResult.rows, inspectionMasters: mastersResult.rows, inspectionRules: rulesResult.rows, inspectionActuals: actualsResult.rows };
+  try {
+    const [plansResult, officesResult, basesResult, officeBasesResult, vehiclesResult, mastersResult, rulesResult, actualsResult] = await Promise.all([
+      pool.query<StoredPlan>("SELECT id, date, office, model, machine_number AS \"machineNumber\", work, operator, start_time AS \"startTime\", end_time AS \"endTime\", status, note, departure_base AS \"departureBase\", arrival_base AS \"arrivalBase\", time_band AS \"timeBand\" FROM operation_plans WHERE tenant_slug = $1 ORDER BY date, machine_number", [tenant]),
+      pool.query<{ name: string }>("SELECT name FROM maintenance_offices WHERE tenant_slug = $1 ORDER BY name", [tenant]),
+      pool.query<{ name: string }>("SELECT name FROM maintenance_bases WHERE tenant_slug = $1 ORDER BY name", [tenant]),
+      pool.query<{ office: string; base: string }>("SELECT office_name AS office, base_name AS base FROM maintenance_office_bases WHERE tenant_slug = $1 ORDER BY office_name, base_name", [tenant]),
+      pool.query<VehicleMaster>("SELECT machine_number AS \"machineNumber\", model, office, home_base AS \"homeBase\" FROM maintenance_vehicles WHERE tenant_slug = $1 ORDER BY machine_number", [tenant]),
+      pool.query<VehicleInspectionMaster>("SELECT machine_number AS \"machineNumber\", model, category, inspection_base AS \"inspectionBase\" FROM vehicle_inspection_masters WHERE tenant_slug = $1 ORDER BY machine_number", [tenant]),
+      pool.query<InspectionRule>("SELECT category, inspection_type AS \"inspectionType\", phase_months AS \"phaseMonths\", interval_months AS \"intervalMonths\", inspection_days AS \"inspectionDays\" FROM inspection_rules ORDER BY category, phase_months", []),
+      pool.query<InspectionActual>("SELECT id, machine_number AS \"machineNumber\", completed_date AS \"completedDate\", phase_months AS \"phaseMonths\" FROM inspection_actuals WHERE tenant_slug = $1 ORDER BY completed_date DESC", [tenant]),
+    ]);
+    const officeBasesMap = officeBasesResult.rows.reduce<Record<string, string[]>>((assignments, item) => ({ ...assignments, [item.office]: [...(assignments[item.office] ?? []), item.base] }), {});
+
+    const vehicles = vehiclesResult.rows.length > 0 ? vehiclesResult.rows : vehicleMasters;
+    const offices = officesResult.rows.length > 0 ? officesResult.rows.map((office) => office.name) : maintenanceOffices;
+    const bases = basesResult.rows.length > 0 ? basesResult.rows.map((base) => base.name) : maintenanceBases;
+    const officeBases = Object.keys(officeBasesMap).length > 0 ? officeBasesMap : mockOfficeBases;
+    const masters = mastersResult.rows.length > 0 ? mastersResult.rows : vehicleInspectionMasters;
+    const rules = rulesResult.rows.length > 0 ? rulesResult.rows : inspectionRules;
+    const actuals = actualsResult.rows.length > 0 ? actualsResult.rows : inspectionActuals;
+    const plans = plansResult.rows.length > 0 ? plansResult.rows : operationPlans;
+
+    return { plans, offices, bases, officeBases, vehicles, inspectionMasters: masters, inspectionRules: rules, inspectionActuals: actuals };
+  } catch (dbErr) {
+    console.warn(`[getTenantOperations] DB query failed, falling back to mock data for tenant=${tenant}:`, dbErr instanceof Error ? dbErr.message : String(dbErr));
+    return {
+      plans: operationPlans,
+      offices: maintenanceOffices,
+      bases: maintenanceBases,
+      officeBases: mockOfficeBases,
+      vehicles: vehicleMasters,
+      inspectionMasters: vehicleInspectionMasters,
+      inspectionRules,
+      inspectionActuals,
+    };
+  }
 }
 
 export async function saveOperationPlan(tenant: string, plan: StoredPlan) {
